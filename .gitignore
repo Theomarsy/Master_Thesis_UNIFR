@@ -1,0 +1,10 @@
+# Ignorer les données
+data/
+*.csv
+*.xlsx
+
+# Ignorer les fichiers temporaires Python et Jupyter
+__pycache__/
+*.ipynb_checkpoints/
+.DS_Store
+.env
