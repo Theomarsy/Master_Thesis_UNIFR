@@ -5,7 +5,7 @@ from tqdm import tqdm
 def compute_zermelo_strengths(matches_data: pd.DataFrame, 
                               winner_id: str = "winner_id", 
                               loser_id: str = "loser_id", 
-                              max_iter: float = 1e5, 
+                              max_iter: float = 100, 
                               tol: float = 1e-12, 
                               initial_strengths: dict = None,
                               ) -> dict :
@@ -68,8 +68,8 @@ def compute_zermelo_strengths(matches_data: pd.DataFrame,
 
     epsilon = 1e-12 # small cst used for numerical stability (avoiding division by zero)
 
-    range_iterator = tqdm(range(int(max_iter)), desc="Computing Zermelo strengths", unit="iterations")
-    
+    range_iterator = tqdm(range(int(max_iter)), desc=f"Computing Zermelo strengths ({len(matches_data)} matches and {len(players)} players)")
+
     for _ in range_iterator:
         pi_old = pi.copy()
 
