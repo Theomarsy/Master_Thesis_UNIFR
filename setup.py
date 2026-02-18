@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="master_thesis_tennis",
-    version="0.1",
+    version="0.2",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     install_requires=[
@@ -11,5 +11,7 @@ setup(
         "tqdm",
         "scipy",
         "matplotlib",
+        "seaborn",
+        "json"
     ],
 )
