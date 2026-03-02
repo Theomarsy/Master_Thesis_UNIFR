@@ -12,6 +12,6 @@ setup(
         "scipy",
         "matplotlib",
         "seaborn",
-        "json"
+        "json",
     ],
 )
