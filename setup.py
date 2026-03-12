@@ -11,7 +11,6 @@ setup(
         "tqdm",
         "scipy",
         "matplotlib",
-        "seaborn",
-        "json",
+        "seaborn"
     ],
 )
