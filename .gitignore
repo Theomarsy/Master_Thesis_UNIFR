@@ -1,12 +1,11 @@
 # Ignorer les données
-data/
+/data
 *.csv
 *.xlsx
-*.txt
 
 # Ignorer les fichiers temporaires Python et Jupyter
 __pycache__/
 *.ipynb_checkpoints/
 .DS_Store
 .env
-
+notes.txt

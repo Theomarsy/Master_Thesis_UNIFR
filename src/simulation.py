@@ -3,34 +3,64 @@ import numpy as np
 import pandas as pd
 
 def calculate_log10_strength(age: int, 
-                             log10_potential: float, 
-                             polynom_3_params: dict
+                             log10_potential: float,
+                             category: str,
+                             aging_model_choice: str,
+                             aging_params: dict,
                              ) -> float :
     
     """
-    Calculate the current strength (in log10) of a player as a function of the age and potential.
+    Calculate the current strength (in log10) of a player as a function of the age and potential (and category if asked)
     
     Args:
         age (int): Current age of the player.
         log10_potential (float): Maximum theoretical Potential of the player (in log10).
-        polynom_3_params (dict): Dictionary containing the parameters of the aging curve.
+        category (str): The player's category (bottom, middle or top).
+        aging_model_choice (str): Choice of the model for the Aging Curve (global or stratified).
+        aging_params: Parameters needed for calculating the Current Strength.
     
     Returns: 
         log10_current_strength (float): Current computed strength of the player (in log10).
     """
 
-    
-    
-    # Get the Parameters of the Aging Curve
-    a = polynom_3_params["a"]
-    b = polynom_3_params["b"]
-    c = polynom_3_params["c"]
-    d = polynom_3_params["d"]
-    offset = polynom_3_params["offset"]
+    # --- 1. Global Model (1 curve for everyone) ---
+    if aging_model_choice == "global":
+        a, b, c, d = aging_params["global_model"]["polynom_3"]["params"]
+        offset = aging_params["global_model"]["polynom_3"]["offset"]
 
-    # Calculate the log10 Difference from the Potential with the Aging Curve
-    # Warning: do not forget the offset to reach the potential!
-    log10_difference_from_potential = a*(age**3)+b*(age**2)+c*age+(d-offset)
+        # Calculate the log10 Difference from the Potential with the Aging Curve
+        # Warning: do not forget the offset to reach the potential!
+        log10_difference_from_potential = a*(age**3)+b*(age**2)+c*age+(d-offset)
+    
+    # --- 2. Stratified Model (curves depend on the category) ---
+    elif aging_model_choice == "stratified":
+        # check in which category the player is
+        if category == "bottom":
+            aging_params_bottom = aging_params["stratified_model"]["bottom"]["constant"] 
+            cst = aging_params_bottom["params"]
+            offset = aging_params_bottom["offset"]
+
+            log10_difference_from_potential = cst-offset
+        
+        elif category == "middle":
+            aging_params_middle = aging_params["stratified_model"]["middle"]["polynom_2"] 
+            a, b, c = aging_params_middle["params"]
+            offset = aging_params_middle["offset"]
+
+            log10_difference_from_potential = a*(age**2) + b*age + (c - offset)
+
+        
+        elif category == "top":
+            aging_params_top = aging_params["stratified_model"]["top"]["polynom_3"]
+            a, b, c, d = aging_params_top["params"]
+            offset = aging_params_top["offset"]
+
+            log10_difference_from_potential = a*(age**3)+b*(age**2)+c*age+(d-offset)
+
+
+    else: 
+        raise ValueError("Error: The model choice for the aging curve has to be either global or stratified.")
+   
 
     # Calculate log10 Current Strength by summing the Two Strengths
     log10_current_strength = log10_potential + log10_difference_from_potential 
@@ -39,19 +69,21 @@ def calculate_log10_strength(age: int,
 
 # ----------------------------------------------------------------------------
 
-def generate_new_players(year: int, 
-                         config_params: dict):
+def generate_new_players(year: int,
+                        aging_model_choice: str,
+                        config_params: dict):
     
     """
     Generates a new set of tennis players for a specific simulation year.
 
     Args:
         year (int): Current year of the simulation.
+         aging_model_choice (str): Choice of the model for the Aging Curve (global or stratified).
         config_params (dict): Configuration dictionary containing all parameters.
     
     Returns:
         new_players_data (pd.DataFrame): DataFram where each row is a new players with following columns: 
-        `player_id`, `age`,` log10_potential`, `current_strength`, `is_active`
+        `player_id`, `age`,` log10_potential`, `current_log10_strength`, `is_active`
     """
 
     # --- 1. Extracting the Parameters from the Dictionary ---
@@ -80,10 +112,13 @@ def generate_new_players(year: int,
     # Entry Age Parameters
     entry_age_params = config_params["entry_age_params"]
 
-    entry_age = entry_age_params["fixed_start_age"]
+    entry_ages = entry_age_params["distribution_ages"]["ages"]
+    entry_ages_probs = entry_age_params["distribution_ages"]["probabilities"]
+    # entry_age_fixed = entry_age_params["fixed_start_age"]
+    
 
     # Aging Curve Parameters
-    aging_curve_params = config_params["aging_curve_params"]["polynom_3_params"]
+    aging_curve_params = config_params["aging_curve_params"]
 
     # Retirement Parameters
     # choices: global_model or stratified_models (with categories limit and bottom/middle/top))
@@ -101,7 +136,7 @@ def generate_new_players(year: int,
     players_ids = [f"{year}_{player_nbr}" for player_nbr in range(nbr_new_players)]
     
     # Getting them an Age
-    players_ages = [entry_age for player_nbr in range(nbr_new_players)]
+    players_ages = np.random.choice(entry_ages, size=nbr_new_players, p=entry_ages_probs)
 
 
     # --- 3. Attribute each Player a Potential + Current Strength + Category ---
@@ -119,11 +154,8 @@ def generate_new_players(year: int,
         
         players_potentials.append(player_potential)
 
-        # calculating the Log10 current Strength based on the Age and log10 Potential
-        player_current_strength = calculate_log10_strength(players_ages[player_nbr], player_potential, aging_curve_params)
-        players_current_strengths.append(player_current_strength)
-    
-        # defining the category by looking at the potential
+
+         # defining the category by looking at the potential
         if player_potential < retirement_categories_limits[0]:
             players_categories.append("bottom")
 
@@ -134,12 +166,20 @@ def generate_new_players(year: int,
             players_categories.append("middle")
 
 
+        # calculating the Log10 current Strength based on the Age and log10 Potential
+        player_current_strength = calculate_log10_strength(players_ages[player_nbr], player_potential, 
+                                                           players_categories[player_nbr], aging_model_choice, 
+                                                           aging_curve_params)
+        players_current_strengths.append(player_current_strength)
+    
+       
+
     # --- 4. Storing the data in a DataFrame
     new_players = {"player_id": players_ids,
                    "start_year": year,
-                   "age": entry_age,
+                   "age": players_ages,
                    "log10_potential": players_potentials,
-                   "current_strength": players_current_strengths,
+                   "current_log10_strength": players_current_strengths,
                    "category": players_categories,
                    "is_active": True}
 
@@ -194,7 +234,8 @@ def update_retirement_status(age: int,
 
 def run_simulation(start_year: int, 
                    end_year: int,
-                    config_params: dict
+                    config_params: dict,
+                    aging_model_choice: str,
                     ) -> pd.DataFrame:
     
     """
@@ -205,6 +246,7 @@ def run_simulation(start_year: int,
         start_year (int): Starting year of the simulation.
         end_year (int): Ending year of the simulation.
         config_params (dict): Configuration dictionary containing all parameters.
+        aging_model_choice (str): Allows to choose the model of the aging curve (global: for one same curve for everyone; stratified: for 3 different curves, one for each category)
     
     Returns:
         pd.DataFrame: DataFrame containg the complete history of all players year by year.
@@ -214,8 +256,8 @@ def run_simulation(start_year: int,
     history_data = [] # keeps memory of all data, for all years
 
     # Get the Parameters needed from the Dictionary
-    aging_curve_params = config_params["aging_curve_params"]["polynom_3_params"]
-    stratified_params = config_params["retirement_params"]["stratified_models"]
+    aging_curve_params = config_params["aging_curve_params"]
+    stratified_retirement_params = config_params["retirement_params"]["stratified_models"]
 
 
     for year in range(start_year, end_year+1):
@@ -228,18 +270,18 @@ def run_simulation(start_year: int,
             for index, player in active_players.iterrows():
                 
                 # Updating the Retirement Status
-                if update_retirement_status(player["age"], player["category"], stratified_params):
+                if update_retirement_status(player["age"], player["category"], stratified_retirement_params):
                     active_players.loc[index, "is_active"] = False
-                    active_players.loc[index, "current_strength"] = np.nan # retired players no longer have a strength
+                    active_players.loc[index, "current_log10_strength"] = np.nan # retired players no longer have a strength
                     
                 # Update of the Current Strength for the Active Players
                 else:
-                    new_strength = calculate_log10_strength(player["age"], player["log10_potential"], aging_curve_params)
-                    active_players.loc[index, "current_strength"] = new_strength
+                    new_strength = calculate_log10_strength(player["age"], player["log10_potential"], player["category"], aging_model_choice,aging_curve_params)
+                    active_players.loc[index, "current_log10_strength"] = new_strength
 
 
         # Create New Generation of Players 
-        new_players = generate_new_players(year, config_params)
+        new_players = generate_new_players(year, aging_model_choice, config_params)
         
         # Create the New DataFrame with all Players
         active_players = pd.concat([active_players, new_players], ignore_index=True)
