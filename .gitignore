@@ -9,3 +9,6 @@ __pycache__/
 .DS_Store
 .env
 notes.txt
+
+# Ignorer les fichiers tests
+test.ipynb

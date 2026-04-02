@@ -71,14 +71,15 @@ def calculate_log10_strength(age: int,
 
 def generate_new_players(year: int,
                         aging_model_choice: str,
-                        config_params: dict):
+                        config_params: dict
+                        ) -> pd.DataFrame:
     
     """
     Generates a new set of tennis players for a specific simulation year.
 
     Args:
         year (int): Current year of the simulation.
-         aging_model_choice (str): Choice of the model for the Aging Curve (global or stratified).
+        aging_model_choice (str): Choice of the model for the Aging Curve (global or stratified).
         config_params (dict): Configuration dictionary containing all parameters.
     
     Returns:
@@ -235,7 +236,7 @@ def update_retirement_status(age: int,
 def run_simulation(start_year: int, 
                    end_year: int,
                     config_params: dict,
-                    aging_model_choice: str,
+                    aging_model_choice: str ="stratified",
                     ) -> pd.DataFrame:
     
     """
