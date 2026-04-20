@@ -267,19 +267,17 @@ def run_simulation(start_year: int,
 
             # The Players are getting older (age +1)
             active_players["age"] += 1
-
-            for index, player in active_players.iterrows():
-                
-                # Updating the Retirement Status
-                if update_retirement_status(player["age"], player["category"], stratified_retirement_params):
-                    active_players.loc[index, "is_active"] = False
-                    active_players.loc[index, "current_log10_strength"] = np.nan # retired players no longer have a strength
                     
-                # Update of the Current Strength for the Active Players
-                else:
-                    new_strength = calculate_log10_strength(player["age"], player["log10_potential"], player["category"], aging_model_choice,aging_curve_params)
-                    active_players.loc[index, "current_log10_strength"] = new_strength
+                    
+            # Updating the Retirement Status 
+            retirement_status = active_players.apply(lambda player_info: update_retirement_status(player_info["age"], player_info["category"], stratified_retirement_params), axis=1)
+            active_players.loc[retirement_status, "is_active"] = False
+            active_players.loc[retirement_status, "current_log10_strength"] = np.nan # retired players no longer have a strength
 
+            # Update of the Current Strength for the Active Players
+            active_players.loc[~retirement_status, "current_log10_strength"] = active_players[~retirement_status].apply(
+                    lambda row: calculate_log10_strength(row["age"], row["log10_potential"], row["category"], aging_model_choice, aging_curve_params), 
+                    axis=1)
 
         # Create New Generation of Players 
         new_players = generate_new_players(year, aging_model_choice, config_params)

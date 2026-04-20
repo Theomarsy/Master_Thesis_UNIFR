@@ -12,3 +12,6 @@ notes.txt
 
 # Ignorer les fichiers tests
 test.ipynb
+
+# Ignorer le dossier "report"
+/report

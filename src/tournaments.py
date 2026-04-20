@@ -3,7 +3,7 @@ import numpy as np
 import random
 from tqdm import tqdm
 
-from simulation import run_simulation, generate_new_players, update_retirement_status
+from simulation import run_simulation, generate_new_players, update_retirement_status, calculate_log10_strength
 
 def initialize_tournament(config_params: dict, 
                           start_year: int=-50, 
@@ -47,7 +47,8 @@ def initialize_tournament(config_params: dict,
 
 # ----------------------------------------------------------------------------
 
-def get_available_players(players_data: pd.DataFrame) -> pd.DataFrame:
+def get_available_players(players_data: pd.DataFrame,
+                          week: int) -> pd.DataFrame:
 
     """
     Filters players to keep only those who are active, have no weeks of rest needed, and have played less than 2 consecutive weeks.
@@ -55,6 +56,7 @@ def get_available_players(players_data: pd.DataFrame) -> pd.DataFrame:
 
     Args:
         players_data (pd.DataFrame): DataFrame containing player information (including their activity status, weeks of rest needed, consecutive weeks played, and ATP points).  
+        week (int): The current week of the simulation.
 
     Returns:
         pd.DataFrame: A DataFrame of available players sorted by ATP points and shuffled for those with no ATP points, indexed by player_id.  
@@ -65,8 +67,10 @@ def get_available_players(players_data: pd.DataFrame) -> pd.DataFrame:
                                        (players_data["weeks_of_rest_needed"] == 0) &
                                        (players_data["consecutive_weeks_played"] < 2)].copy()
     
-    # sort them by their ATP points (current year and previous year) in descending order
-    available_players.sort_values(by=["ATP_points_current_year", "ATP_points_previous_year"], ascending=False, inplace=True)
+    # sort them by their ATP points, taking into account current and previous year points
+    # as weeks advance: the previous year points become less and less important (previous year points * (46-week)/46)))
+    available_players["score_ranking"] = available_players["ATP_points_current_year"] + available_players["ATP_points_previous_year"]*(46-week)/46
+    available_players.sort_values(by=["score_ranking"], ascending=False, inplace=True)
 
     # if they have no ATP points, shuffle them to randomize their order (instead of always having the same players with no ATP points at the end of the list)
     no_ATP_points_condition = (available_players["ATP_points_current_year"] == 0) & (available_players["ATP_points_previous_year"] == 0)
@@ -77,7 +81,7 @@ def get_available_players(players_data: pd.DataFrame) -> pd.DataFrame:
 
     # concatenate the players with ATP points (sorted by points) and the players with no ATP points (shuffled)
     available_players_data = pd.concat([players_with_ATP_points, players_no_ATP_points_shuffled])
-
+    
     return available_players_data
 
 # ----------------------------------------------------------------------------
@@ -99,7 +103,6 @@ def assign_players_to_tournaments(available_players_data: pd.DataFrame,
     registration = {}
 
     pool_players = available_players_data.copy()
-    pool_players["rank"] = range(1, len(pool_players) + 1) # add a column with the ATP ranking of the players 
 
     # group the tournaments by level
     for level, group_of_tournaments in tournaments_of_the_week.groupby("level", sort=False):
@@ -526,11 +529,11 @@ def update_players_fatigue(players_data: pd.DataFrame,
     players_data.loc[players_with_2_consecutive_weeks, "consecutive_weeks_played"] = 0
 
     # for players playing in big tournaments (1000 or 2000): add 2 to their weeks of rest needed and reset their consecutive weeks played to 0
-    big_tournaments_playing_players = [player for player, tournament_level in players_playing_dict.items() if tournament_level in [1000, 2000]]
+    # big_tournaments_playing_players = [player for player, tournament_level in players_playing_dict.items() if tournament_level in [1000, 2000]]
 
-    if big_tournaments_playing_players: # to avoid problem in the case there is no such a tournament in the week
-        players_data.loc[big_tournaments_playing_players, "weeks_of_rest_needed"] = 2
-        players_data.loc[big_tournaments_playing_players, "consecutive_weeks_played"] = 0
+    # if big_tournaments_playing_players: # to avoid problem in the case there is no such a tournament in the week
+    #     players_data.loc[big_tournaments_playing_players, "weeks_of_rest_needed"] = 2
+    #     players_data.loc[big_tournaments_playing_players, "consecutive_weeks_played"] = 0
 
     return players_data
 
@@ -562,7 +565,8 @@ def run_full_tournaments(years: int,
         Finally, it compiles the history of games and yearly rankings into DataFrames.
         """
         # get the age-stratified retirement parameters from the config (for retirement status update)
-        age_stratified_params = config_params["retirement_params"]["stratified_models"]
+        retirement_stratified_params = config_params["retirement_params"]["stratified_models"]
+        aging_curve_params = config_params["aging_curve_params"]
         
         # list for storing all games history and yearly rankings
         all_games = []
@@ -593,7 +597,7 @@ def run_full_tournaments(years: int,
 
                 # update the retirement status of the current players and get them a retirement week
                 # axis = 1 to apply the function on each row (and not on each column)            
-                retirement_status = current_players.apply(lambda player_info: update_retirement_status(player_info["age"], player_info["category"], age_stratified_params), axis=1)
+                retirement_status = current_players.apply(lambda player_info: update_retirement_status(player_info["age"], player_info["category"], retirement_stratified_params), axis=1)
                 current_players.loc[retirement_status, "retire_week"] = np.random.randint(0, 47, size=retirement_status.sum())
                 
                 # get the full data of players for the year
@@ -609,10 +613,29 @@ def run_full_tournaments(years: int,
                         current_players.loc[current_players["retire_week"] == week, "is_active"] = False
 
                         # get the players available for the tournaments of the week(active, no rest needed, less than 2 consecutive weeks played)
-                        available_players = get_available_players(current_players)
+                        available_players = get_available_players(current_players, week)
 
-                        # find the tournaments of the week and assign the available players to them depending on their ATP ranking and the tournament level
+                        # rank them for the week
+                        available_players["rank"] = range(1, len(available_players)+1)
+
+                        # find the tournaments of the week 
                         tournaments_of_the_week = tournaments_schedule[tournaments_schedule["week"] == week]
+
+                        # check whether there is a better tournament (1000 or 2000) next week for top players
+                        if week != 46: 
+                            tournaments_of_next_week = tournaments_schedule[tournaments_schedule["week"] == week+1]
+                            best_tournament_level_next_week = tournaments_of_next_week["level"].max()
+                            best_tournament_level_this_week = tournaments_of_the_week["level"].max()
+
+                            if best_tournament_level_next_week in [1000, 2000] and best_tournament_level_next_week > best_tournament_level_this_week:
+
+                                best_level_tournament = tournaments_of_next_week[tournaments_of_next_week["level"]==best_tournament_level_next_week].iloc[0]
+                                cut_ranking = best_level_tournament["players"]- best_level_tournament["num_qualified"] + best_level_tournament["qualif"]
+
+                                # remove the top players that have already played that last week (to permit them to go to 1000/2000 tournaments)
+                                available_players = available_players[(available_players["consecutive_weeks_played"]!=1) | (available_players["rank"] > cut_ranking)].copy()
+
+                        # Assign the available players to them depending on their ATP ranking and the tournament level
                         registration = assign_players_to_tournaments(available_players, tournaments_of_the_week)
 
                         # loop over all tournaments of the week
@@ -648,11 +671,37 @@ def run_full_tournaments(years: int,
                                 
                 # at the end of the year
                 # save the yearly rankings of the players (player_id, age, current_log10_strength, log10_potential, category, ATP_points_current_year, year)
-                year_rankings = current_players.reset_index()[["player_id", "age", "current_log10_strength", "log10_potential", "category", "ATP_points_current_year"]].copy()
+                year_rankings = current_players[["age", "current_log10_strength", "log10_potential", "category", "ATP_points_current_year"]].copy()
+                # get the number of games/tournaments played by each player
+                games_year_dataframe = pd.DataFrame(games_history_year).dropna(subset=["winner_id"])
+
+                matches_won = games_year_dataframe["winner_id"].value_counts()
+                matches_lost = games_year_dataframe["loser_id"].value_counts()
+
+                matches_played = matches_won.add(matches_lost, fill_value=0)
+
+                tournaments_winners = games_year_dataframe[["winner_id", "tournament_id"]].rename(columns={"winner_id": "player_id"})
+                tournaments_losers = games_year_dataframe[["loser_id", "tournament_id"]].rename(columns={"loser_id": "player_id"})
+                tournaments_players = pd.concat([tournaments_winners, tournaments_losers])
+                tournaments_played = tournaments_players.groupby("player_id")["tournament_id"].nunique()
+
+                year_rankings["games_played"] = matches_played
+                year_rankings["games_played"] = year_rankings["games_played"].fillna(0).astype(int) # for the ones who didn't play
+                year_rankings["tournaments_played"] = tournaments_played
+                year_rankings["tournaments_played"] = year_rankings["tournaments_played"].fillna(0).astype(int)
+
                 year_rankings["year"] = year
+
+                year_rankings.reset_index(inplace=True)
+
                 year_rankings.sort_values(by=["ATP_points_current_year"], ascending=False, inplace=True)
                 year_rankings.reset_index(drop=True, inplace=True)
                 yearly_rankings.append(year_rankings)
+
+
+                # remove the retired players from the data by keeping only active players
+                current_players = current_players[current_players["is_active"]].copy()
+
 
                 # update the players data:
                 current_players["age"] += 1
@@ -661,11 +710,22 @@ def run_full_tournaments(years: int,
                 current_players["consecutive_weeks_played"] = 0
                 current_players["weeks_of_rest_needed"] = 0
 
+                # update the log10 strengths of all players according to their age
+                current_players["current_log10_strength"] = [calculate_log10_strength(age=age, 
+                                                                                     log10_potential=log10_potential,
+                                                                                     category=category,
+                                                                                     aging_model_choice="stratified",
+                                                                                     aging_params=aging_curve_params) 
+                                                                                     for age, log10_potential, category in zip(current_players["age"], current_players["log10_potential"], current_players["category"])]
+
+
                 # reset enter and retire week 
                 current_players["enter_week"] = -1
                 current_players["retire_week"] = -1
 
-                all_games.extend(games_history_year) #
 
-               
-        return pd.DataFrame(all_games), pd.concat(yearly_rankings)
+                all_games.extend(games_history_year) 
+
+        all_games_dataframe = pd.DataFrame(all_games).dropna(subset=["winner_id"])
+       
+        return all_games_dataframe, pd.concat(yearly_rankings)
