@@ -1,13 +1,14 @@
 import pandas as pd
 import numpy as np
 import random
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
-from simulation import run_simulation, generate_new_players, update_retirement_status, calculate_log10_strength
+from simulation import run_simulation, generate_new_players, update_retirement_status, calculate_log10_strength, update_retirement_status_test
 
 def initialize_tournament(config_params: dict, 
                           start_year: int=-50, 
-                          end_year: int=0
+                          end_year: int=0,
+                          random_initial_points: bool=False
                           ) -> pd.DataFrame:
 
     """
@@ -18,6 +19,7 @@ def initialize_tournament(config_params: dict,
         config_params (dict): Configuration dictionary containing all parameters.
         start_year (int): The starting year for the warm-up simulation. Default is -50.
         end_year (int): The ending year for the warm-up simulation. Default is 0.
+        random_initial_points (bool): Whether to initialize players with random ATP points. Default is False.
 
     Returns:
         pd.DataFrame: A DataFrame containing the initialized players with their attributes, indexed by player_id.
@@ -33,7 +35,12 @@ def initialize_tournament(config_params: dict,
     initialize_players_data = end_year_data[end_year_data["is_active"]].copy()
 
     # adding them columns useful for tracking the ATP points / number of consecutive weeks played / weeks of rest they need
-    initialize_players_data["ATP_points_previous_year"] = ((10 ** initialize_players_data["current_log10_strength"])*100).astype(int)
+    if random_initial_points:
+        # initialize them with random ATP points
+        initialize_players_data["ATP_points_previous_year"] = np.random.randint(0, 2000, size=len(initialize_players_data))
+    else:
+        initialize_players_data["ATP_points_previous_year"] = ((10 ** initialize_players_data["current_log10_strength"])*100).astype(int)
+
     initialize_players_data["ATP_points_current_year"] = 0
     initialize_players_data["consecutive_weeks_played"] = 0
     initialize_players_data["weeks_of_rest_needed"] = 0
@@ -72,17 +79,30 @@ def get_available_players(players_data: pd.DataFrame,
     available_players["score_ranking"] = available_players["ATP_points_current_year"] + available_players["ATP_points_previous_year"]*(46-week)/46
     available_players.sort_values(by=["score_ranking"], ascending=False, inplace=True)
 
-    # if they have no ATP points, shuffle them to randomize their order (instead of always having the same players with no ATP points at the end of the list)
-    no_ATP_points_condition = (available_players["ATP_points_current_year"] == 0) & (available_players["ATP_points_previous_year"] == 0)
-    players_no_ATP_points = available_players[no_ATP_points_condition]
-    players_with_ATP_points = available_players[~no_ATP_points_condition]
+    lower_limit_ATP_points = 2
 
-    players_no_ATP_points_shuffled = players_no_ATP_points.sample(frac=1) # .sample(frac=1) shuffles the rows of the DF
+    # filter out players with ATP points below the lower limit
+    bottom_players = available_players[available_players["score_ranking"] < lower_limit_ATP_points]
+    other_players = available_players[available_players["score_ranking"] >= lower_limit_ATP_points]
 
-    # concatenate the players with ATP points (sorted by points) and the players with no ATP points (shuffled)
-    available_players_data = pd.concat([players_with_ATP_points, players_no_ATP_points_shuffled])
+    # shuffle bottom players to have a chance for them to be selected in tournaments 
+    bottom_players_shuffled = bottom_players.sample(frac=1)
+
+    # concatenate the other players (sorted by points) and the bottom players (shuffled)
+    available_players_data = pd.concat([other_players, bottom_players_shuffled])
+
+    # # if they have no ATP points, shuffle them to randomize their order (instead of always having the same players with no ATP points at the end of the list)
+    # no_ATP_points_condition = (available_players["ATP_points_current_year"] == 0) & (available_players["ATP_points_previous_year"] == 0)
+    # players_no_ATP_points = available_players[no_ATP_points_condition]
+    # players_with_ATP_points = available_players[~no_ATP_points_condition]
+
+    # players_no_ATP_points_shuffled = players_no_ATP_points.sample(frac=1) # .sample(frac=1) shuffles the rows of the DF
+
+    # # concatenate the players with ATP points (sorted by points) and the players with no ATP points (shuffled)
+    # available_players_data = pd.concat([players_with_ATP_points, players_no_ATP_points_shuffled])
     
     return available_players_data
+
 
 # ----------------------------------------------------------------------------
 
@@ -111,18 +131,32 @@ def assign_players_to_tournaments(available_players_data: pd.DataFrame,
         eligible_players = pool_players.copy()
 
         if level==10 or level==20:
-            eligible_players = eligible_players[eligible_players["rank"] > 150]
+            eligible_players = eligible_players[eligible_players["rank"] > 300] # initially: 150
+
+            # give more chance to low ranked players to participate
+            top_600_players = eligible_players[eligible_players["rank"] <= 600]
+            chosen_top_600_players = top_600_players.sample(frac=0.2)
+
+            top_600_1000_players = eligible_players[(eligible_players["rank"] > 600) & (eligible_players["rank"] <= 1000)]
+            chosen_600_1000_players = top_600_1000_players.sample(frac=0.45)
+
+            bottom_players = eligible_players[eligible_players["rank"] > 1000]
+            chosen_bottom_players = bottom_players.sample(frac=0.8)
+
+            eligible_players = pd.concat([chosen_top_600_players, chosen_600_1000_players, chosen_bottom_players])
+            eligible_players = eligible_players.sort_values(by="rank", ascending=True)
 
         elif level < 250:
             eligible_players = eligible_players[eligible_players["rank"] > 50]
 
         elif level == 250:
-            eligible_players = eligible_players[eligible_players["rank"] > 30]
+            eligible_players = eligible_players[eligible_players["rank"] > 10]
 
         elif level == 500:
             top_30_players = eligible_players[eligible_players["rank"] <= 30]
-            chosen_top_30_players = top_30_players.sample(frac=0.3)
+            chosen_top_30_players = top_30_players.sample(frac=0.6)
             eligible_players = pd.concat([chosen_top_30_players, eligible_players[eligible_players["rank"] > 30]])
+
 
         # -- 2. Calculating the total capactiy of the tournaments of the week (direct acceptances and qualifiers players) --
         
@@ -544,6 +578,8 @@ def run_full_tournaments(years: int,
                          tournaments_schedule: pd.DataFrame,
                          tournaments_points: pd.DataFrame,
                          seeding: bool=True,
+                         random_initial_points: bool=False,
+                         track_week_ranks: bool=False
                          ) -> tuple:
         """
         Performs the full simulation of the tournaments for a given number of years, by simulating each week of the year and updating the players' ATP points and fatigue accordingly.
@@ -553,7 +589,9 @@ def run_full_tournaments(years: int,
                 config_params (dict): Configuration dictionary containing all parameters.
                 tournaments_schedule (pd.DataFrame): DataFrame containing the full schedule of tournaments with their levels and capacities.
                 tournaments_points (pd.DataFrame): DataFrame containing the points associated to each round and tournament level.
-                seeding (bool): Whether to apply seeding or not in the tournament draws. Default
+                seeding (bool): Whether to apply seeding or not in the tournament draws. Default is True.
+                random_initial_points (bool): Whether to initialize players with random ATP points at the start of the simulation. Default is False.
+                track_week_ranks (bool): Whether to get the weekly ranks of the players during the simulation. Default is False.
 
         Returns:
                 tuple: A tuple containing two DataFrames: the first one with the history of all games played in the tournaments (tournament level, tournament id, week, year, round, winner, loser), 
@@ -575,7 +613,7 @@ def run_full_tournaments(years: int,
         print("Initialising the tournament by running a warm-up simulation...")
 
         # initialize the tournament by running a warm-up simulation to have a stabilized number of active players at the start of the main simulation
-        current_players = initialize_tournament(config_params)
+        current_players = initialize_tournament(config_params, random_initial_points=random_initial_points)
         print("End of the initialisation. Starting the simulation of the tournaments...")
 
         pbar = tqdm(range(1, years + 1))
@@ -597,7 +635,8 @@ def run_full_tournaments(years: int,
 
                 # update the retirement status of the current players and get them a retirement week
                 # axis = 1 to apply the function on each row (and not on each column)            
-                retirement_status = current_players.apply(lambda player_info: update_retirement_status(player_info["age"], player_info["category"], retirement_stratified_params), axis=1)
+                # retirement_status = current_players.apply(lambda player_info: update_retirement_status(player_info["age"], player_info["category"], retirement_stratified_params), axis=1)
+                retirement_status = update_retirement_status_test(current_players["age"], current_players["category"], retirement_stratified_params)
                 current_players.loc[retirement_status, "retire_week"] = np.random.randint(0, 47, size=retirement_status.sum())
                 
                 # get the full data of players for the year
@@ -611,6 +650,18 @@ def run_full_tournaments(years: int,
                         # update the activity status of the players depending on their entry week and retirement week
                         current_players.loc[current_players["enter_week"] == week, "is_active"] = True 
                         current_players.loc[current_players["retire_week"] == week, "is_active"] = False
+
+                        if track_week_ranks:
+                            # get the total points for making the ranking of the players each week
+                            is_active = current_players["is_active"]==True
+                            current_players.loc[is_active, "score_ranking"] = current_players.loc[is_active, "ATP_points_current_year"] + current_players.loc[is_active, "ATP_points_previous_year"]*(46-week)/46
+
+                            # get the ranking of the week
+                            current_players["week_rank"] = np.nan # initialize with NaN for unactive players (and avoid having them in the ranking)
+                            # method = "min" to give the same rank to players with the same score
+                            current_players.loc[is_active, "week_rank"] = current_players.loc[is_active, "score_ranking"].rank(ascending=False, method="min")
+
+                        
 
                         # get the players available for the tournaments of the week(active, no rest needed, less than 2 consecutive weeks played)
                         available_players = get_available_players(current_players, week)
@@ -633,7 +684,7 @@ def run_full_tournaments(years: int,
                                 cut_ranking = best_level_tournament["players"]- best_level_tournament["num_qualified"] + best_level_tournament["qualif"]
 
                                 # remove the top players that have already played that last week (to permit them to go to 1000/2000 tournaments)
-                                available_players = available_players[(available_players["consecutive_weeks_played"]!=1) | (available_players["rank"] > cut_ranking)].copy()
+                                available_players = available_players[(available_players["rank"] > cut_ranking)].copy()
 
                         # Assign the available players to them depending on their ATP ranking and the tournament level
                         registration = assign_players_to_tournaments(available_players, tournaments_of_the_week)
@@ -650,8 +701,13 @@ def run_full_tournaments(years: int,
                                 registration_main = tournament_players["main"]
 
                                 # play the qualifications and get the qualified players
-                                qualif_draw = prepare_tournament_draw(registration_qualif, week, current_players, seeding=seeding)
-                                qualified_players, games_history_qualif = play_qualifications(qualif_draw, tournament_id, tournament_level, week, year, num_qualified, current_players)
+                                # play the qualifications and get the qualified players
+                                if len(registration_qualif) > 0:
+                                    qualif_draw = prepare_tournament_draw(registration_qualif, week, current_players, seeding=seeding)
+                                    qualified_players, games_history_qualif = play_qualifications(qualif_draw, tournament_id, tournament_level, week, year, num_qualified, current_players)
+                                else:
+                                    qualified_players = []
+                                    games_history_qualif = []
                                 
                                 # play the main tournament
                                 main_players = registration_main + qualified_players
@@ -661,6 +717,19 @@ def run_full_tournaments(years: int,
                                 # register all games (qualification and main tournament)
                                 games_history_week.extend(games_history_qualif)
                                 games_history_week.extend(games_history_tournament)
+                        
+                        if track_week_ranks:
+                            # update the ranks for each game in the week
+                            for game in games_history_week:
+                                winner_id = game["winner_id"]
+                                loser_id = game["loser_id"]
+
+
+                                game["loser_rank"] = current_players.loc[loser_id, "week_rank"]
+                                if winner_id is not None: # to avoid problems with the fictive game for the qualified players
+                                    game["winner_rank"] = current_players.loc[winner_id, "week_rank"] 
+
+
 
                         games_history_year.extend(games_history_week) # add the games of the week to the games of the year
 
@@ -669,7 +738,10 @@ def run_full_tournaments(years: int,
                         update_players_fatigue(current_players, games_history_week)
 
                                 
-                # at the end of the year
+                # --- at the end of the year
+
+                # remove the retired players from the data by keeping only active players
+                current_players = current_players[current_players["is_active"]].copy()
                 # save the yearly rankings of the players (player_id, age, current_log10_strength, log10_potential, category, ATP_points_current_year, year)
                 year_rankings = current_players[["age", "current_log10_strength", "log10_potential", "category", "ATP_points_current_year"]].copy()
                 # get the number of games/tournaments played by each player
@@ -698,11 +770,6 @@ def run_full_tournaments(years: int,
                 year_rankings.reset_index(drop=True, inplace=True)
                 yearly_rankings.append(year_rankings)
 
-
-                # remove the retired players from the data by keeping only active players
-                current_players = current_players[current_players["is_active"]].copy()
-
-
                 # update the players data:
                 current_players["age"] += 1
                 current_players["ATP_points_previous_year"] = current_players["ATP_points_current_year"]
@@ -729,3 +796,57 @@ def run_full_tournaments(years: int,
         all_games_dataframe = pd.DataFrame(all_games).dropna(subset=["winner_id"])
        
         return all_games_dataframe, pd.concat(yearly_rankings)
+
+
+# ----------------------------------------------------------------------------
+
+def prepare_tournament_schedule_points(tournament_points_path: str,
+                                       tournament_schedule_path: str
+                                       ) -> tuple:
+
+    """
+    Prepare the tournament schedule and points dataframes for the simulation by adding the ITF 10 and 20 tournaments into the schedule and merging with the points dataframe.
+
+    Args:
+        tournament_points_path (str): The path to the tournament points file.
+        tournament_schedule_path (str): The path to the tournament schedule file.
+
+    Returns:
+        tuple: A tuple containing the tournament schedule dataframe and the tournament points dataframe.
+    """
+
+    tournaments_points_raw = pd.read_csv(tournament_points_path, comment="#", sep="\t")
+    tournaments_schedule = pd.read_csv(tournament_schedule_path, comment="#", sep=",", header=None, names=["date", "level"])
+
+    # get the week of each tournament
+    tournaments_schedule["week"] = pd.factorize(tournaments_schedule["date"])[0]
+
+    # add the small tournaments (10 and 20) into the schedule
+    number_ITF_10_tournaments = tournaments_points_raw.loc[tournaments_points_raw["level"] == 10, "number"].iloc[0]
+    number_ITF_20_tournaments = tournaments_points_raw.loc[tournaments_points_raw["level"] == 20, "number"].iloc[0]
+
+    print(f"Number of ITF-10 tournaments: {number_ITF_10_tournaments}")
+    print(f"Number of ITF-20 tournaments: {number_ITF_20_tournaments}")
+
+    # creating dataframes for the ITF 10 and 20 tournaments (attributing them one week each)
+    weeks_ITF_10 = np.random.randint(0, 47, size=number_ITF_10_tournaments)
+    weeks_ITF_20 = np.random.randint(0, 47, size=number_ITF_20_tournaments)
+
+    ITF_10_schedule = pd.DataFrame({"level": 10, "week": weeks_ITF_10})
+    ITF_20_schedule = pd.DataFrame({"level": 20, "week": weeks_ITF_20})
+
+    # get the full schedule
+    tournaments_schedule_full = pd.concat([ITF_10_schedule, ITF_20_schedule, tournaments_schedule])
+
+    # merge and keep only the relevant columns for the simulation
+    tournament_schedule_final = pd.merge(tournaments_schedule_full, tournaments_points_raw, how="left")
+    tournament_schedule_final.drop(columns=["date", "number", "W", "F", "SF", "QF", "R16", "R32", "R64", "R128", "Q", "Q1", "Q2", "Q3"], inplace=True)
+    tournament_schedule_final.sort_values(by=["week", "level"], ascending=[True, False], inplace=True)
+    tournament_schedule_final.reset_index(drop=True, inplace=True)
+
+    # create the tournament_points file with the points for each round and each tournament level
+    tournaments_points = tournaments_points_raw[["level", "W", "F", "SF", "QF", "R16", "R32", "R64", "R128", "Q", "Q1", "Q2", "Q3"]].copy()
+
+    return tournament_schedule_final, tournaments_points
+
+# ----------------------------------------------------------------------------

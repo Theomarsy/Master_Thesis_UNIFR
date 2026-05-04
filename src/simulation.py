@@ -211,7 +211,7 @@ def update_retirement_status(age: int,
     # Types of fit: linear / quadratic / exp
     bottom_fit_parameters = stratified_params["bottom"]["linear"]["params"]
     middle_fit_parameters = stratified_params["middle"]["linear"]["params"]
-    top_fit_parameters = stratified_params["top"]["quadratic"]["params"]
+    top_fit_parameters = stratified_params["top"]["exp"]["params"]
     
     # Computing the Probability to Retire, depending on the Category
 
@@ -222,7 +222,7 @@ def update_retirement_status(age: int,
         prob_to_retire = middle_fit_parameters[0]*(age-18)+middle_fit_parameters[1]
 
     else: 
-        prob_to_retire = top_fit_parameters[0]*(age-18)**2+top_fit_parameters[1]*(age-18)+top_fit_parameters[2]
+        prob_to_retire = top_fit_parameters[0]*np.exp(top_fit_parameters[1]*(age-18))+top_fit_parameters[2]
     
     # ensuring that the probability is between 0 and 1
     prob_to_retire = min(1, prob_to_retire)
@@ -232,6 +232,57 @@ def update_retirement_status(age: int,
     return np.random.random() < prob_to_retire
 
 # ----------------------------------------------------------------------------
+
+def update_retirement_status_test(ages: pd.Series, 
+                             categories: pd.Series, 
+                             stratified_params: dict
+                             ) -> pd.Series:
+    
+    """
+    Determines whether a player will retire this year (based on probability).
+
+    Args:
+        age (int): The player's current ages.
+        categories (str): The player's categories (bottom, middle or top).
+        stratified_params (dict): A dictionary containing the parameters for the retirement probabilities. 
+
+    Returns:
+        pd.Series: A series of boolean values indicating whether each player retires.
+    """
+
+
+    # Types of fit: linear / quadratic / exp
+    bottom_fit_parameters = stratified_params["bottom"]["linear"]["params"]
+    middle_fit_parameters = stratified_params["middle"]["linear"]["params"]
+    top_fit_parameters = stratified_params["top"]["exp"]["params"]
+
+    # binary variables to know in which category the player is
+    is_bottom = (categories == "bottom")
+    is_middle = (categories == "middle")
+    is_top = (categories == "top")
+
+    # probability to retire as a function of the category
+    prob_to_retire_bottom = bottom_fit_parameters[0]*(ages-18)+bottom_fit_parameters[1]
+    prob_to_retire_middle = middle_fit_parameters[0]*(ages-18)+middle_fit_parameters[1]
+    prob_to_retire_top = top_fit_parameters[0]*np.exp(top_fit_parameters[1]*(ages-18))+top_fit_parameters[2]
+
+    # get the probability to retire for each player by looking at his category
+    prob_to_retire = np.select([is_bottom, is_middle, is_top],
+                                [prob_to_retire_bottom, prob_to_retire_middle, prob_to_retire_top],
+                                default=0)
+
+    # ensuring that the probability is between 0 and 1
+    prob_to_retire = np.clip(prob_to_retire, 0, 1)
+    
+    # for each player, get a random number and compare it to the probability to retire
+    random_numbers = np.random.random(size=len(prob_to_retire))
+
+
+    # Choosing if the player retires depending on the probability
+    return pd.Series(random_numbers < prob_to_retire, index=ages.index)
+
+# ----------------------------------------------------------------------------
+
 
 def run_simulation(start_year: int, 
                    end_year: int,
@@ -269,8 +320,9 @@ def run_simulation(start_year: int,
             active_players["age"] += 1
                     
                     
-            # Updating the Retirement Status 
-            retirement_status = active_players.apply(lambda player_info: update_retirement_status(player_info["age"], player_info["category"], stratified_retirement_params), axis=1)
+            # # Updating the Retirement Status 
+            # retirement_status = active_players.apply(lambda player_info: update_retirement_status(player_info["age"], player_info["category"], stratified_retirement_params), axis=1)
+            retirement_status = update_retirement_status_test(active_players["age"], active_players["category"], stratified_retirement_params)
             active_players.loc[retirement_status, "is_active"] = False
             active_players.loc[retirement_status, "current_log10_strength"] = np.nan # retired players no longer have a strength
 

@@ -12,6 +12,8 @@ notes.txt
 
 # Ignorer les fichiers tests
 test.ipynb
+tournaments_old.py
+tournaments_test.py
 
 # Ignorer le dossier "report"
 /report
