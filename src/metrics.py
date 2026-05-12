@@ -269,7 +269,7 @@ def get_correlations(ranking_metrics_data: pd.DataFrame,
         ranking_metrics_data (pd.DataFrame):  Contains the ranking metrics and the hidden truth for each player and each year.
         warm_up_years (int): Number of initial years to exclude from the correlation calculation (burn-in period). Default is 10.
         return_all_years (bool): Whether to return the correlation for each year or just the mean and std. Default is False.
-        coefficient (str): The correlation coefficient to use ("kendall", "spearman", "pearson"). Default is "kendall".
+        coefficient (str): The correlation coefficient to use ("kendall", "spearman", "pearson", "weighted_footrule"). Default is "kendall".
 
     Returns:
         pd.DataFrame: A DataFrame containing the correlation values for each metric and each year 
@@ -282,52 +282,72 @@ def get_correlations(ranking_metrics_data: pd.DataFrame,
     # get the years available
     years = sorted(rankings_metrics_clean["year"].unique())
 
+    # get the years to consider and verifiy it is not greater than the total number of years available
+    valid_years = years[warm_up_years:]
+    if not valid_years:
+        raise ValueError("No years available after burn-in period. Please reduce the number of warm-up years.")
+        
     # get the columns name for the different metrics
     metrics = ["ATP_points", "zermelo_strength", "pagerank_score", "in_degree"]
 
-    # if we want all the data, each year (for graphical visualisation)
-    if return_all_years:
+    results_all_years = []
+    metrics_scores_lists = {metric : [] for metric in metrics}
 
-        results = [] # to store the correlation values for each year and each metric
+    for year in valid_years:
 
-        for year in years:
-            corr_year = {"year": year} # store the correlation values for each metric for this year
-            rankings_metrics_year = rankings_metrics_clean[rankings_metrics_clean["year"]==year] # get the data for this year
+        rankings_metrics_year = rankings_metrics_clean[rankings_metrics_clean["year"]==year]
+        corr_year = {"year": year} # store the correlation values for each metric for this year
 
-            for metric in metrics:
-                # calculate the correlation between the log10 of the hidden truth and the metric for this year
+        for metric in metrics:
+            if coefficient in ["kendall", "spearman", "pearson"]:
                 corr_metric_year = rankings_metrics_year[["log10_hidden_truth", metric]].corr(method=coefficient).iloc[0,1]
                 corr_year[metric]=corr_metric_year # add the correlation for this metric to the dictionary
+                metrics_scores_lists[metric].append(corr_metric_year)
+            
+            elif coefficient == "weighted_footrule":
+                # compute the weighted footrule (see Who's #1? The Science of Rating and Ranking, Langville and Meyer)
+                # method = min implies that tied players receive the lower rank of the groupe 
+                # (if 2nd and 3rd are tied, they will both get 2nd in the ranking, and the next one will have the 4th place)
+                truth_rank = rankings_metrics_year["log10_hidden_truth"].rank(ascending=False, method="min")
+                corr_rank = rankings_metrics_year[metric].rank(ascending=False, method="min")
 
-            results.append(corr_year)
+                numerator = np.abs(truth_rank-corr_rank)
+                denominator = np.minimum(truth_rank, corr_rank) # returns the smaller value for each pair
+                weighted_footrule_year = np.sum(numerator/denominator)
 
-        return pd.DataFrame(results)
+                # get the normalisation constant as a function of the length of the rankings
+                N_year = len(truth_rank)
+                ideal_ranks = np.arange(1,N_year+1)
+                worst_ranks= np.arange(N_year, 0, -1)
 
-    # if we only want a mean value with std (final results)
-    else: 
+                # get the worse possible weighted footrule with inversed rankings
+                max_numerator = np.abs(ideal_ranks-worst_ranks)
+                max_denominator = np.minimum(ideal_ranks, worst_ranks)
+                max_weighted_footrule_year = np.sum(max_numerator/max_denominator)
 
-        # get the years to consider and verifiy it is not greater than the total number of years available
-        valid_years = years[warm_up_years:]
-        if not valid_years:
-            raise ValueError("No years available after burn-in period. Please reduce the number of warm-up years.")
-        
+                normalised_weighted_footrule_year = 1-weighted_footrule_year/max_weighted_footrule_year
+
+                # save the results in both lists
+                corr_year[metric] = normalised_weighted_footrule_year
+                metrics_scores_lists[metric].append(normalised_weighted_footrule_year)
+
+            else:
+                raise ValueError(f"Coefficient {coefficient} unknown. Please choose between these options: kendall, spearman, pearson and weighted_footrule.")
+            
+        results_all_years.append(corr_year)
+
+    # if we want all the data, each year (for graphical visualisation)
+    if return_all_years:
+        return pd.DataFrame(results_all_years)
+    
+    else:
         results = []
         for metric in metrics:
-            correlations_year = []
-
-            # calculate the correlation for each year and store it in a list
-            for year in valid_years:
-                rankings_metrics_year = rankings_metrics_clean[rankings_metrics_clean["year"]==year]
-                
-                corr_metric_year = rankings_metrics_year[["log10_hidden_truth", metric]].corr(method=coefficient).iloc[0,1]
-                correlations_year.append(corr_metric_year)
-                # print(f"Year {year}, metric = {metric}: {corr_metric_year}")
-
-            # calculate the mean and std of the correlation values for the metric
             results.append({"Metric": metric,
-                            "Mean correlation": np.mean(correlations_year),
-                            "Std": np.std(correlations_year)})
-        
+                            "Coefficient": coefficient,
+                            "Mean correlation": np.mean(metrics_scores_lists[metric]),
+                            "Std": np.std(metrics_scores_lists[metric])})
+            
         return pd.DataFrame(results)
 
 # ----------------------------------------------------------------------------
@@ -363,66 +383,46 @@ def get_fraction_of_N_players(ranking_metrics_data: pd.DataFrame,
     if N > min_players_in_year:
         raise ValueError(f"N is too large. The minimum number of players in a year is {min_players_in_year}. Please change N.")
 
+    # get the years to consider and verifiy it is not greater than the total number of years available
+    valid_years = years[warm_up_years:]
+    if not valid_years:
+        raise ValueError("No years available after burn-in period. Please reduce the number of warm-up years.")
+
     # get the columns name for the different metrics
     metrics = ["ATP_points", "zermelo_strength", "pagerank_score", "in_degree"]
 
+    results_all_years = []
+    metrics_fraction_lists = {metric : [] for metric in metrics}
+
+    for year in valid_years:
+        rankings_metrics_year = rankings_metrics_clean[rankings_metrics_clean["year"]==year] # get the data for this year
+
+        # get the hidden truth: N best players
+        top_N_players_truth = set(rankings_metrics_year.nlargest(N, "log10_hidden_truth", keep="all")["player_id"])
+
+        fraction_year = {"year": year} # store the fraction values for each metric for this year
+        
+        for metric in metrics:
+            # get the top N players for this metric and this year
+            top_N_players_metric = set(rankings_metrics_year.nlargest(N, metric, keep="all")["player_id"])
+
+            fraction_metric_year = len(top_N_players_truth.intersection(top_N_players_metric)) / N
+
+            fraction_year[metric] = fraction_metric_year
+            metrics_fraction_lists[metric].append(fraction_metric_year) # add the fraction for this metric to the dictionary
+        
+        results_all_years.append(fraction_year)
+
     # if we want all the data, each year (for graphical visualisation)
     if return_all_years:
-        
-        results = [] # to store the fraction values for each year and each metric
-
-        for year in years:
-            fraction_year = {"year": year} # store the fraction values for each metric for this year
-            rankings_metrics_year = rankings_metrics_clean[rankings_metrics_clean["year"]==year] # get the data for this year
-
-            # get the top N players in the hidden truth for this year
-            top_N_metrics_year = rankings_metrics_year.sort_values(by="log10_hidden_truth", ascending=False).head(N)
-            top_N_players_truth = set(top_N_metrics_year["player_id"]) # get the IDs and change dataframe to set
-
-            # get the top N players according to the metrics
-            for metric in metrics:
-                # get the top N players for this metric and this year
-                top_N_metric_year = rankings_metrics_year.sort_values(by=metric, ascending=False).head(N)
-                top_N_players_metric = set(top_N_metric_year["player_id"])
-
-                # calculate the fraction of players in the top N of the hidden truth that are also in the top N of the metric for this year
-                fraction_metric_year = len(top_N_players_truth.intersection(top_N_players_metric)) / N
-                fraction_year[metric] = fraction_metric_year # add the fraction for this metric to the dictionary
-
-            results.append(fraction_year)
-
-        return pd.DataFrame(results)
+        return pd.DataFrame(results_all_years)
 
     else:
-        # get the years to consider and verifiy it is not greater than the total number of years available
-        valid_years = years[warm_up_years:]
-        if not valid_years:
-            raise ValueError("No years available after burn-in period. Please reduce the number of warm-up years.")
-        
         results = []
         for metric in metrics:
-            fractions_year = []
-
-            # calculate the correlation for each year and store it in a list
-            for year in valid_years:
-                rankings_metrics_year = rankings_metrics_clean[rankings_metrics_clean["year"]==year]
-                
-                # get the top N players in the hidden truth for this year
-                top_N_metrics_year = rankings_metrics_year.sort_values(by="log10_hidden_truth", ascending=False).head(N)
-                top_N_players_truth = set(top_N_metrics_year["player_id"]) # get the IDs and change dataframe to set
-
-                # get the top N players according to the metric
-                top_N_metric_year = rankings_metrics_year.sort_values(by=metric, ascending=False).head(N)
-                top_N_players_metric = set(top_N_metric_year["player_id"])
-
-                # calculate the fraction of players in the top N of the hidden truth that are also in the top N of the metric for this year
-                fraction_metric_year = len(top_N_players_truth.intersection(top_N_players_metric)) / N
-                fractions_year.append(fraction_metric_year)
-
-            # calculate the mean and std of the fraction values for the metric
             results.append({"Metric": metric,
-                            "Mean fraction": np.mean(fractions_year),
-                            "Std": np.std(fractions_year)})
+                            "Mean fraction": np.mean(metrics_fraction_lists[metric]),
+                            "Std": np.std(metrics_fraction_lists[metric])})
 
 
         return pd.DataFrame(results)

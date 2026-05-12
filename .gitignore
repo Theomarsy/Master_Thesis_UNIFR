@@ -14,6 +14,7 @@ notes.txt
 test.ipynb
 tournaments_old.py
 tournaments_test.py
+tournaments_older.py
 
 # Ignorer le dossier "report"
 /report

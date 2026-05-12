@@ -72,34 +72,34 @@ def get_available_players(players_data: pd.DataFrame,
     # keep only active players with no weeks of rest needed and less than 2 consecutive weeks played
     available_players = players_data[players_data["is_active"] &
                                        (players_data["weeks_of_rest_needed"] == 0) &
-                                       (players_data["consecutive_weeks_played"] < 2)].copy()
+                                       (players_data["consecutive_weeks_played"] < 3)].copy()
     
     # sort them by their ATP points, taking into account current and previous year points
     # as weeks advance: the previous year points become less and less important (previous year points * (46-week)/46)))
     available_players["score_ranking"] = available_players["ATP_points_current_year"] + available_players["ATP_points_previous_year"]*(46-week)/46
     available_players.sort_values(by=["score_ranking"], ascending=False, inplace=True)
 
-    lower_limit_ATP_points = 2
+    # lower_limit_ATP_points = 2
 
-    # filter out players with ATP points below the lower limit
-    bottom_players = available_players[available_players["score_ranking"] < lower_limit_ATP_points]
-    other_players = available_players[available_players["score_ranking"] >= lower_limit_ATP_points]
+    # # filter out players with ATP points below the lower limit
+    # bottom_players = available_players[available_players["score_ranking"] < lower_limit_ATP_points]
+    # other_players = available_players[available_players["score_ranking"] >= lower_limit_ATP_points]
 
-    # shuffle bottom players to have a chance for them to be selected in tournaments 
-    bottom_players_shuffled = bottom_players.sample(frac=1)
+    # # shuffle bottom players to have a chance for them to be selected in tournaments 
+    # bottom_players_shuffled = bottom_players.sample(frac=1)
 
-    # concatenate the other players (sorted by points) and the bottom players (shuffled)
-    available_players_data = pd.concat([other_players, bottom_players_shuffled])
+    # # concatenate the other players (sorted by points) and the bottom players (shuffled)
+    # available_players_data = pd.concat([other_players, bottom_players_shuffled])
 
-    # # if they have no ATP points, shuffle them to randomize their order (instead of always having the same players with no ATP points at the end of the list)
-    # no_ATP_points_condition = (available_players["ATP_points_current_year"] == 0) & (available_players["ATP_points_previous_year"] == 0)
-    # players_no_ATP_points = available_players[no_ATP_points_condition]
-    # players_with_ATP_points = available_players[~no_ATP_points_condition]
+    # if they have no ATP points, shuffle them to randomize their order (instead of always having the same players with no ATP points at the end of the list)
+    no_ATP_points_condition = (available_players["ATP_points_current_year"] == 0) & (available_players["ATP_points_previous_year"]==0)
+    players_no_ATP_points = available_players[no_ATP_points_condition]
+    players_with_ATP_points = available_players[~no_ATP_points_condition]
 
-    # players_no_ATP_points_shuffled = players_no_ATP_points.sample(frac=1) # .sample(frac=1) shuffles the rows of the DF
+    players_no_ATP_points_shuffled = players_no_ATP_points.sample(frac=1) # .sample(frac=1) shuffles the rows of the DF
 
-    # # concatenate the players with ATP points (sorted by points) and the players with no ATP points (shuffled)
-    # available_players_data = pd.concat([players_with_ATP_points, players_no_ATP_points_shuffled])
+    # concatenate the players with ATP points (sorted by points) and the players with no ATP points (shuffled)
+    available_players_data = pd.concat([players_with_ATP_points, players_no_ATP_points_shuffled])
     
     return available_players_data
 
@@ -138,23 +138,35 @@ def assign_players_to_tournaments(available_players_data: pd.DataFrame,
             chosen_top_600_players = top_600_players.sample(frac=0.2)
 
             top_600_1000_players = eligible_players[(eligible_players["rank"] > 600) & (eligible_players["rank"] <= 1000)]
-            chosen_600_1000_players = top_600_1000_players.sample(frac=0.45)
+            chosen_600_1000_players = top_600_1000_players.sample(frac=0.3)
 
             bottom_players = eligible_players[eligible_players["rank"] > 1000]
-            chosen_bottom_players = bottom_players.sample(frac=0.8)
+            chosen_bottom_players = bottom_players.sample(frac=0.5)
 
-            eligible_players = pd.concat([chosen_top_600_players, chosen_600_1000_players, chosen_bottom_players])
-            eligible_players = eligible_players.sort_values(by="rank", ascending=True)
+
+            under_1000_players = pd.concat([chosen_top_600_players, chosen_600_1000_players]).sort_values(by="rank", ascending=True)
+            shuffled_bottom = chosen_bottom_players.sample(frac=1)
+            
+            eligible_players = pd.concat([under_1000_players, shuffled_bottom])
 
         elif level < 250:
             eligible_players = eligible_players[eligible_players["rank"] > 50]
-
+            
+            top_100_players = eligible_players[eligible_players["rank"] <= 100].sample(frac=0.15)
+            top_100_300_players = eligible_players[(eligible_players["rank"] > 100) & (eligible_players["rank"] <= 300)].sample(frac=0.35)
+            top_300_600_players = eligible_players[(eligible_players["rank"] > 300) & (eligible_players["rank"] <= 600)].sample(frac=0.30)
+            
+            top_600_1000_players = eligible_players[(eligible_players["rank"] > 600) & (eligible_players["rank"] <= 1000)].sample(frac=0.15)
+            bottom_players = eligible_players[eligible_players["rank"] > 1000].sample(frac=0.02)
+            
+            eligible_players = pd.concat([top_100_players, top_100_300_players, top_300_600_players, top_600_1000_players, bottom_players]).sort_values(by="rank", ascending=True)
+            
         elif level == 250:
             eligible_players = eligible_players[eligible_players["rank"] > 10]
 
         elif level == 500:
             top_30_players = eligible_players[eligible_players["rank"] <= 30]
-            chosen_top_30_players = top_30_players.sample(frac=0.6)
+            chosen_top_30_players = top_30_players.sample(frac=0.5)
             eligible_players = pd.concat([chosen_top_30_players, eligible_players[eligible_players["rank"] > 30]])
 
 
@@ -276,7 +288,7 @@ def prepare_tournament_draw(selected_players_ids: list,
 
         tournament_draw = [None] * len(rankings)
 
-        # seed process: the top 2 seeds are placed in specifi positions, and the others are shuffled to randomize their positions
+        # seed process: the top 2 seeds are placed in specific positions, and the others are shuffled to randomize their positions
         positions = seed_positions[len(rankings)]
         atp_steps = [(0,2), (2,4), (4,8), (8,16), (16,32)]
 
@@ -557,10 +569,10 @@ def update_players_fatigue(players_data: pd.DataFrame,
     # for players playing: add 1 to their consecutive weeks played
     players_data.loc[list(players_playing), "consecutive_weeks_played"] += 1
 
-    # for players with more than 2 consecutive weeks: add 1 to their weeks of rest needed and reset their consecutive weeks played to 0
-    players_with_2_consecutive_weeks = players_data[players_data["consecutive_weeks_played"] >= 2].index
-    players_data.loc[players_with_2_consecutive_weeks, "weeks_of_rest_needed"] = 1
-    players_data.loc[players_with_2_consecutive_weeks, "consecutive_weeks_played"] = 0
+    # for players with more than 3 consecutive weeks: add 1 to their weeks of rest needed and reset their consecutive weeks played to 0
+    players_with_3_consecutive_weeks = players_data[players_data["consecutive_weeks_played"] >= 3].index
+    players_data.loc[players_with_3_consecutive_weeks, "weeks_of_rest_needed"] = 1
+    players_data.loc[players_with_3_consecutive_weeks, "consecutive_weeks_played"] = 0
 
     # for players playing in big tournaments (1000 or 2000): add 2 to their weeks of rest needed and reset their consecutive weeks played to 0
     # big_tournaments_playing_players = [player for player, tournament_level in players_playing_dict.items() if tournament_level in [1000, 2000]]
@@ -681,10 +693,11 @@ def run_full_tournaments(years: int,
                             if best_tournament_level_next_week in [1000, 2000] and best_tournament_level_next_week > best_tournament_level_this_week:
 
                                 best_level_tournament = tournaments_of_next_week[tournaments_of_next_week["level"]==best_tournament_level_next_week].iloc[0]
-                                cut_ranking = best_level_tournament["players"]- best_level_tournament["num_qualified"] + best_level_tournament["qualif"]
+                                # cut_ranking = best_level_tournament["players"]- best_level_tournament["num_qualified"] + best_level_tournament["qualif"]
 
                                 # remove the top players that have already played that last week (to permit them to go to 1000/2000 tournaments)
-                                available_players = available_players[(available_players["rank"] > cut_ranking)].copy()
+                                # replace > ... by cut_ranking if cut_ranking is used
+                                available_players = available_players[(available_players["rank"] > 50)].copy()
 
                         # Assign the available players to them depending on their ATP ranking and the tournament level
                         registration = assign_players_to_tournaments(available_players, tournaments_of_the_week)
@@ -825,8 +838,8 @@ def prepare_tournament_schedule_points(tournament_points_path: str,
     number_ITF_10_tournaments = tournaments_points_raw.loc[tournaments_points_raw["level"] == 10, "number"].iloc[0]
     number_ITF_20_tournaments = tournaments_points_raw.loc[tournaments_points_raw["level"] == 20, "number"].iloc[0]
 
-    print(f"Number of ITF-10 tournaments: {number_ITF_10_tournaments}")
-    print(f"Number of ITF-20 tournaments: {number_ITF_20_tournaments}")
+    # print(f"Number of ITF-10 tournaments: {number_ITF_10_tournaments}")
+    # print(f"Number of ITF-20 tournaments: {number_ITF_20_tournaments}")
 
     # creating dataframes for the ITF 10 and 20 tournaments (attributing them one week each)
     weeks_ITF_10 = np.random.randint(0, 47, size=number_ITF_10_tournaments)
